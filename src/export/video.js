@@ -11,6 +11,7 @@ function pickMime() {
 
 export function createVideoCapture(canvas, getAudioStream) {
   let recorder = null;
+  let videoTrack = null;
   let chunks = [];
   let extension = 'webm';
 
@@ -18,20 +19,29 @@ export function createVideoCapture(canvas, getAudioStream) {
     if (typeof MediaRecorder === 'undefined') throw new Error('当前浏览器不能导出视频');
     const [mime, ext] = pickMime();
     extension = ext;
-    const stream = canvas.captureStream(60);
+    const stream = canvas.captureStream(0);
+    videoTrack = stream.getVideoTracks()[0] || null;
     const audio = getAudioStream();
     for (const track of audio.getAudioTracks()) stream.addTrack(track);
     chunks = [];
+    const pixels = Math.max(1, canvas.width * canvas.height);
+    const videoBitsPerSecond = Math.round(Math.min(6_500_000, Math.max(1_800_000, pixels * 1.8)));
     recorder = new MediaRecorder(stream, mime ? {
       mimeType: mime,
-      videoBitsPerSecond: 10_000_000,
+      videoBitsPerSecond,
       audioBitsPerSecond: 160_000
     } : undefined);
     recorder.ondataavailable = (event) => {
       if (event.data?.size) chunks.push(event.data);
     };
-    recorder.start(200);
+    recorder.start(500);
+    requestFrame();
     return extension;
+  }
+
+  function requestFrame() {
+    if (!videoTrack || videoTrack.readyState !== 'live') return;
+    try { videoTrack.requestFrame(); } catch { /* older browsers sample on their own */ }
   }
 
   function stop() {
@@ -51,9 +61,11 @@ export function createVideoCapture(canvas, getAudioStream) {
       };
       if (current.state === 'inactive') {
         recorder = null;
+        videoTrack = null;
         resolve(null);
         return;
       }
+      videoTrack = null;
       current.stop();
     });
   }
@@ -61,6 +73,7 @@ export function createVideoCapture(canvas, getAudioStream) {
   return {
     start,
     stop,
+    requestFrame,
     get active() {
       return !!recorder && recorder.state === 'recording';
     },

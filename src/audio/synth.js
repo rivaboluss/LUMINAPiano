@@ -240,8 +240,10 @@ export function createSynth(ctx) {
         const voice = spawn(midi, velocity, Math.max(when, ctx.currentTime), Math.max(0.05, duration), gainScale);
         if (!voice) return;
         scheduled.add(voice);
-        const wait = Math.max(30, (voice.end - ctx.currentTime) * 1000 + 40);
-        setTimeout(() => scheduled.delete(voice), wait);
+        if (typeof ctx.startRendering !== 'function') {
+          const wait = Math.max(30, (voice.end - ctx.currentTime) * 1000 + 40);
+          setTimeout(() => scheduled.delete(voice), wait);
+        }
       } catch (error) {
         console.warn(error);
       }

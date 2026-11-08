@@ -1,5 +1,6 @@
 import { createEngine } from './audio/engine.js';
 import { createDemoSong } from './demo/song.js';
+import { encodeSongVideo } from './export/encode.js';
 import { createVideoCapture } from './export/video.js';
 import { bindComputerKeyboard } from './input/keyboard.js';
 import { openMidi } from './input/midi.js';
@@ -28,6 +29,9 @@ const defaults = {
   clean: false,
   labels: true,
   grid: true,
+  bgPulse: false,
+  exportFps: 60,
+  exportAudio: true,
   flowColors: [],
   smokeColors: [],
   mode: 'free',
@@ -42,12 +46,14 @@ const canvas = $('stage');
 const engine = createEngine();
 const renderer = createRenderer(canvas);
 const capture = createVideoCapture(canvas, () => engine.tapAudio());
+renderer.setAfterPaint(() => capture.requestFrame());
 
 const els = {
   play: $('btn-play'),
   stop: $('btn-stop'),
   rec: $('btn-rec'),
   exportMidi: $('btn-export-midi'),
+  songClear: $('btn-song-clear'),
   video: $('btn-video'),
   exportVideo: $('btn-export-video'),
   seek: $('seek'),
@@ -61,6 +67,9 @@ const els = {
   drums: $('chk-drums'),
   labels: $('chk-labels'),
   grid: $('chk-grid'),
+  bgPulse: $('chk-bg-pulse'),
+  exportFps: $('export-fps'),
+  exportAudio: $('chk-export-audio'),
   clean: $('chk-clean'),
   speed: $('speed'),
   speedLabel: $('speed-label'),
@@ -95,7 +104,7 @@ let lastName = '';
 let lastTake = null;
 let seeking = false;
 let videoMode = null;
-let exportWait = null;
+let exportPhase = null;
 let toastTimer = 0;
 let frameAcc = 0;
 
@@ -123,12 +132,6 @@ engine.on('noteon', ({ midi, velocity }) => {
 engine.on('noteoff', ({ midi }) => renderer.liveUp(midi));
 engine.on('pedal', ({ down }) => renderer.setSustain(down));
 engine.on('ended', () => {
-  if (exportWait) {
-    const finish = exportWait;
-    exportWait = null;
-    finish();
-    return;
-  }
   if (engine.getSong()) renderer.showResult(settings.mode === 'rhythm' ? 'rhythm' : 'done');
   sync();
 });
@@ -143,10 +146,14 @@ window.addEventListener('resize', () => renderer.resize());
 const typing = bindComputerKeyboard({
   initialOctave: settings.octave,
   onDown: (midi, velocity) => {
+    if (exportPhase) return;
     engine.resume();
     engine.inputNoteOn(midi, velocity);
   },
-  onUp: (midi) => engine.inputNoteOff(midi),
+  onUp: (midi) => {
+    if (exportPhase) return;
+    engine.inputNoteOff(midi);
+  },
   onOctave: (label, octave) => {
     settings.octave = octave;
     els.octave.textContent = label;
@@ -262,6 +269,9 @@ function applySettings() {
   renderer.setClean(settings.clean);
   renderer.setShowLabels(settings.labels);
   renderer.setShowGrid(settings.grid !== false);
+  renderer.setBgPulse(settings.bgPulse === true);
+  settings.exportFps = Number(settings.exportFps) === 30 ? 30 : 60;
+  settings.exportAudio = settings.exportAudio !== false;
   settings.flowColors = sanitizeColors(settings.flowColors);
   settings.smokeColors = sanitizeColors(settings.smokeColors);
   renderer.setFlowColors(settings.flowColors);
@@ -294,6 +304,9 @@ function applySettings() {
   els.drums.checked = settings.drums;
   els.labels.checked = settings.labels;
   els.grid.checked = settings.grid;
+  els.bgPulse.checked = settings.bgPulse === true;
+  els.exportFps.value = String(settings.exportFps);
+  els.exportAudio.checked = settings.exportAudio;
   els.clean.checked = settings.clean;
   for (const button of els.modes) button.classList.toggle('active', button.dataset.mode === settings.mode);
 }
@@ -313,15 +326,22 @@ function setMode(mode, reset = true) {
 function sync() {
   const song = engine.getSong();
   const playing = engine.isPlaying();
+  const exporting = exportPhase != null;
   els.play.textContent = playing ? '暂停' : '播放';
   els.rec.textContent = engine.isRecording() ? '停止录音' : '录制演奏';
   els.rec.classList.toggle('primary', engine.isRecording());
-  els.video.textContent = videoMode ? '停止并保存' : '录制画面';
-  els.exportVideo.textContent = videoMode === 'song' ? '停止并保存' : '导出整曲视频';
-  els.exportVideo.disabled = videoMode === 'manual';
+  els.video.textContent = videoMode === 'manual' ? '停止并保存' : '录制画面';
+  els.video.disabled = exporting;
+  els.exportVideo.textContent = '导出整曲视频';
+  els.exportVideo.disabled = videoMode != null || exporting;
+  els.songClear.disabled = !song || exporting;
+  $('welcome').hidden = !!song;
+  els.exportFps.disabled = exporting;
+  els.exportAudio.disabled = exporting;
   els.meta.textContent = song ? `${song.title} · ${song.bpm} BPM · ${song.notes.length} 音符` : '还没有曲目';
-  els.badge.hidden = !videoMode;
-  els.badge.querySelector('span').textContent = videoMode === 'song' ? '导出中' : 'REC';
+  els.badge.hidden = videoMode !== 'manual';
+  els.badge.querySelector('span').textContent = 'REC';
+  $('export-mask').hidden = !exporting;
   updateSeek();
 }
 
@@ -345,10 +365,6 @@ function toast(message) {
   toastTimer = setTimeout(() => els.toast.classList.remove('show'), 3400);
 }
 
-function wait(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 function loadSong(song, filename) {
   if (filename && (!song.title || song.title === '未命名曲目')) {
     song.title = filename.replace(/\.(mid|midi)$/i, '');
@@ -361,6 +377,16 @@ function loadSong(song, filename) {
 
 async function readBuffer(file) {
   return new Uint8Array(await file.arrayBuffer());
+}
+
+function clearSong() {
+  if (exportPhase) return;
+  lastBuffer = null;
+  lastName = '';
+  engine.stop();
+  engine.load(null);
+  if (settings.mode !== 'free') setMode('free');
+  else sync();
 }
 
 async function importMidi(file) {
@@ -418,6 +444,7 @@ function fillDevices() {
 }
 
 function onMidi(message, input) {
+  if (exportPhase) return;
   if (selectedId !== '*' && input?.id !== selectedId) return;
   if (!autoMuted && !liveTouched && settings.liveSound) {
     autoMuted = true;
@@ -434,6 +461,7 @@ function onMidi(message, input) {
 }
 
 async function togglePlay() {
+  if (exportPhase) return;
   await engine.resume();
   const song = engine.getSong();
   if (!song) return toast('请先导入 MIDI，或播放演示曲');
@@ -449,9 +477,9 @@ async function togglePlay() {
 }
 
 async function stopCapture() {
-  exportWait = null;
   const ext = capture.ext;
   const blob = await capture.stop();
+  renderer.endCapture();
   const prefix = safeName(engine.getSong()?.title || 'live');
   videoMode = null;
   if (blob?.size) downloadBlob(blob, `Lumina-${prefix}.${ext}`);
@@ -460,59 +488,85 @@ async function stopCapture() {
 }
 
 async function toggleVideo() {
+  if (exportPhase) return;
   if (capture.active) {
     await stopCapture();
     return;
   }
   try {
     await engine.resume();
+    renderer.beginCapture();
     capture.start();
     videoMode = 'manual';
     toast('开始录制画面，再点一次即可保存');
     sync();
   } catch (error) {
+    renderer.endCapture();
     toast(error.message || '无法开始录制');
   }
 }
 
+function beginExportScreen() {
+  exportPhase = 'render';
+  $('export-note').textContent = '正在直接渲染整曲，不用等它播完。请留在这个页面。完成后会自动弹出下载。';
+  $('export-bar-fill').style.width = '0%';
+  $('export-progress').textContent = '0%';
+}
+
+function showExportProgress(ratio, note, detail) {
+  exportPhase = ratio >= 0.98 ? 'save' : 'render';
+  if (note) $('export-note').textContent = note;
+  const pct = Math.round(Math.max(0, Math.min(1, ratio)) * 100);
+  $('export-bar-fill').style.width = `${pct}%`;
+  $('export-progress').textContent = detail || `${pct}%`;
+}
+
 async function exportSongVideo() {
-  if (videoMode === 'song') {
-    engine.pause();
-    await stopCapture();
-    return;
-  }
+  if (exportPhase) return;
   if (capture.active) return toast('请先停止当前录制');
   const song = engine.getSong();
   if (!song?.notes.length) return toast('请先导入曲目或播放演示曲');
   const prevMode = settings.mode;
   const prevLoop = engine.isLoop();
+  let suspended = false;
+  let capturing = false;
   try {
-    await engine.resume();
+    engine.pause();
     engine.setLoop(false);
     if (prevMode !== 'auto') setMode('auto', false);
     engine.stop();
-    capture.start();
+    beginExportScreen();
     videoMode = 'song';
     sync();
-    toast('正在导出整曲，请保持此页面在最前');
-    exportWait = async () => {
-      await wait(700);
-      const ext = capture.ext;
-      const blob = await capture.stop();
-      videoMode = null;
-      engine.setLoop(prevLoop);
-      if (prevMode !== settings.mode) setMode(prevMode);
-      else sync();
-      if (blob?.size) downloadBlob(blob, `Lumina-${safeName(song.title)}.${ext}`);
-      else toast('没有录到画面');
-    };
-    engine.play();
+    renderer.suspend();
+    suspended = true;
+    renderer.beginExport();
+    capturing = true;
+    renderer.prepareExport(song);
+    const blob = await encodeSongVideo({
+      song,
+      canvas,
+      speed: settings.speed / 100,
+      volume: settings.volume / 100,
+      fps: settings.exportFps,
+      audio: settings.exportAudio,
+      paint: (songTime, dt, now) => renderer.paintExport(songTime, dt, now),
+      onProgress: showExportProgress
+    });
+    showExportProgress(1, '渲染完成，正在保存。下载会自动弹出。', '100%');
+    if (blob?.size) downloadBlob(blob, `Lumina-${safeName(song.title)}.mp4`);
+    else toast('没有生成视频');
   } catch (error) {
+    toast(error?.message || '导出失败');
+  } finally {
+    if (capturing) renderer.endCapture();
+    renderer.beginRun(engine.getSong(), engine.getSongTime());
+    if (suspended) renderer.resume();
     videoMode = null;
-    exportWait = null;
+    exportPhase = null;
     engine.setLoop(prevLoop);
-    toast(error.message || '导出失败');
-    sync();
+    if (prevMode !== settings.mode) setMode(prevMode);
+    else sync();
   }
 }
 
@@ -528,6 +582,7 @@ function bindPointer() {
     return Math.round(52 + rel * 70);
   };
   canvas.addEventListener('pointerdown', (event) => {
+    if (exportPhase) return;
     if (event.button !== 0) return;
     engine.resume();
     const [x, y] = pos(event);
@@ -560,6 +615,10 @@ function bindPointer() {
 
 function bindKeys() {
   window.addEventListener('keydown', (event) => {
+    if (exportPhase) {
+      event.preventDefault();
+      return;
+    }
     const tag = event.target?.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
     if (event.code === 'Space') {
@@ -618,6 +677,7 @@ function bindControls() {
     importMidi(event.target.files?.[0]);
     event.target.value = '';
   };
+  els.songClear.onclick = () => clearSong();
   $('btn-demo').onclick = () => {
     lastBuffer = null;
     loadSong(createDemoSong(), '星澜');
@@ -625,23 +685,36 @@ function bindControls() {
   };
   els.play.onclick = () => togglePlay();
   els.stop.onclick = async () => {
+    if (exportPhase) return;
     if (videoMode) await stopCapture();
     engine.stop();
     sync();
   };
   els.seek.addEventListener('pointerdown', () => {
+    if (exportPhase) return;
     seeking = true;
   });
-  els.seek.addEventListener('input', () => engine.seek(Number(els.seek.value)));
+  els.seek.addEventListener('input', () => {
+    if (exportPhase) return;
+    engine.seek(Number(els.seek.value));
+  });
   window.addEventListener('pointerup', () => {
     seeking = false;
   });
   els.loop.onchange = () => {
+    if (exportPhase) {
+      els.loop.checked = false;
+      return;
+    }
     settings.loop = els.loop.checked;
     engine.setLoop(settings.loop);
     saveSettings();
   };
   els.speed.oninput = () => {
+    if (exportPhase) {
+      els.speed.value = String(settings.speed);
+      return;
+    }
     settings.speed = Number(els.speed.value);
     engine.setSpeed(settings.speed / 100);
     els.speedLabel.textContent = `${(settings.speed / 100).toFixed(2)}×`;
@@ -729,6 +802,19 @@ function bindControls() {
     renderer.setShowGrid(settings.grid);
     saveSettings();
   };
+  els.bgPulse.onchange = () => {
+    settings.bgPulse = els.bgPulse.checked;
+    renderer.setBgPulse(settings.bgPulse);
+    saveSettings();
+  };
+  els.exportFps.onchange = () => {
+    settings.exportFps = Number(els.exportFps.value) === 30 ? 30 : 60;
+    saveSettings();
+  };
+  els.exportAudio.onchange = () => {
+    settings.exportAudio = els.exportAudio.checked;
+    saveSettings();
+  };
   els.clean.onchange = () => {
     settings.clean = els.clean.checked;
     renderer.setClean(settings.clean);
@@ -740,6 +826,7 @@ function bindControls() {
 
   window.addEventListener('dragover', (event) => {
     event.preventDefault();
+    if (exportPhase) return;
     $('dropmask').hidden = false;
   });
   window.addEventListener('dragleave', (event) => {
@@ -748,6 +835,7 @@ function bindControls() {
   window.addEventListener('drop', (event) => {
     event.preventDefault();
     $('dropmask').hidden = true;
+    if (exportPhase) return;
     const file = event.dataTransfer?.files?.[0];
     if (!file) return;
     if (/\.(mid|midi)$/i.test(file.name)) importMidi(file);
@@ -755,7 +843,7 @@ function bindControls() {
     else toast('请拖入 MIDI 或图片');
   });
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden && videoMode) toast('页面切到后台后，导出的视频可能会卡顿');
+    if (document.hidden && videoMode === 'manual') toast('页面切到后台后，录制的视频可能会卡顿');
   });
 }
 

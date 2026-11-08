@@ -36,6 +36,10 @@ export function createRenderer(canvas) {
   let keyH = 180;
   let keyLift = 32;
   let hitY = 400;
+  let recording = false;
+  let pixelBudget = 2560 * 1440;
+  let bgPulse = false;
+  let stillBg = null;
   let layout = null;
   let lookAhead = 2.6;
   let particleLevel = 2;
@@ -73,25 +77,44 @@ export function createRenderer(canvas) {
   let getSongTime = () => 0;
   let getNow = () => performance.now() / 1000;
   let onFrameCb = null;
+  let afterPaint = null;
   let last = performance.now();
   let raf = 0;
+  let suspended = false;
 
   particles.setPalette([theme.accent]);
 
-  function resize() {
-    const rect = canvas.getBoundingClientRect();
-    width = Math.max(1, rect.width);
-    height = Math.max(1, rect.height);
-    dpr = Math.min(window.devicePixelRatio || 1, 2);
-    canvas.width = Math.round(width * dpr);
-    canvas.height = Math.round(height * dpr);
-    const lift = Math.max(0, Math.min(keyLift, height * 0.42));
-    keyH = Math.max(150, Math.min(240, height * 0.3, height - lift - 72));
+  function layoutFrame(nextWidth, nextHeight) {
+    width = Math.max(1, nextWidth);
+    height = Math.max(1, nextHeight);
+    const lift = Math.max(0, Math.min(keyLift, height * 0.22));
+    const room = Math.max(1, height - lift);
+    let nextKey = Math.min(room * 0.28, 220);
+    const waterfall = Math.min(room * 0.62, 160);
+    if (room - nextKey < waterfall) nextKey = Math.max(72, room - waterfall);
+    keyH = nextKey;
     hitY = Math.max(48, height - keyH - lift);
     layout = createLayout(width, 8);
     vignette = null;
     wash = null;
+    stillBg = null;
     bgKey = '';
+  }
+
+  function resize() {
+    if (recording) return;
+    const rect = canvas.getBoundingClientRect();
+    const cssW = Math.max(1, rect.width);
+    const cssH = Math.max(1, rect.height);
+    let next = Math.min(window.devicePixelRatio || 1, 2);
+    const pixels = cssW * cssH * next * next;
+    if (pixels > pixelBudget) next *= Math.sqrt(pixelBudget / pixels);
+    dpr = Math.max(0.35, next);
+    canvas.width = Math.max(2, Math.round(cssW * dpr));
+    canvas.height = Math.max(2, Math.round(cssH * dpr));
+    if (canvas.width % 2) canvas.width -= 1;
+    if (canvas.height % 2) canvas.height -= 1;
+    layoutFrame(cssW, cssH);
   }
 
   function particleMul() {
@@ -273,42 +296,41 @@ export function createRenderer(canvas) {
     return plate;
   }
 
-  function drawBackground(now) {
-    if (!bgImage) {
-      ctx.drawImage(backdrop(), 0, 0, width, height);
-      const orbs = [
-        [0.25, 0.3, theme.accent],
-        [0.75, 0.42, theme.accent2],
-        [0.5, 0.7, theme.palette[4]]
-      ];
-      ctx.save();
-      ctx.globalCompositeOperation = 'lighter';
-      const span = Math.max(width, height) * (0.56 + energy * 0.1);
-      orbs.forEach((orb, index) => {
-        const x = width * (orb[0] + Math.sin(now * 0.08 + index) * 0.06);
-        const y = height * (orb[1] + Math.cos(now * 0.06 + index) * 0.04);
-        ctx.globalAlpha = 0.2 + energy * 0.08;
-        ctx.drawImage(orbSprite(orb[2]), x - span / 2, y - span / 2, span, span);
-      });
-      ctx.restore();
-      for (const star of stars) {
-        const alpha = 0.25 + Math.sin(now * star.s + star.p) * 0.2;
-        ctx.fillStyle = `rgba(230,245,255,${alpha})`;
-        ctx.beginPath();
-        ctx.arc(star.x * width, star.y * hitY, star.r, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    } else {
-      const source = backgroundSource();
-      if (source) ctx.drawImage(source, 0, 0, width, height);
-      ctx.fillStyle = `rgba(0,0,0,${darkness})`;
-      ctx.fillRect(0, 0, width, height);
+  function drawStars(now) {
+    for (const star of stars) {
+      const alpha = 0.25 + Math.sin(now * star.s + star.p) * 0.2;
+      ctx.fillStyle = `rgba(230,245,255,${alpha})`;
+      ctx.beginPath();
+      ctx.arc(star.x * width, star.y * hitY, star.r, 0, Math.PI * 2);
+      ctx.fill();
     }
+  }
 
+  function drawOrbs(target, now, pulse) {
+    const orbs = [
+      [0.25, 0.3, theme.accent],
+      [0.75, 0.42, theme.accent2],
+      [0.5, 0.7, theme.palette[4]]
+    ];
+    target.save();
+    target.globalCompositeOperation = 'lighter';
+    const span = Math.max(width, height) * (pulse ? 0.56 + energy * 0.1 : 0.5);
+    orbs.forEach((orb, index) => {
+      const driftX = pulse ? Math.sin(now * 0.08 + index) * 0.06 : 0;
+      const driftY = pulse ? Math.cos(now * 0.06 + index) * 0.04 : 0;
+      const x = width * (orb[0] + driftX);
+      const y = height * (orb[1] + driftY);
+      target.globalAlpha = pulse ? 0.2 + energy * 0.08 : 0.16;
+      target.drawImage(orbSprite(orb[2]), x - span / 2, y - span / 2, span, span);
+    });
+    target.restore();
+  }
+
+  function drawVignette(target) {
     if (!vignette) {
       vignette = document.createElement('canvas');
-      vignette.width = Math.round(width);
-      vignette.height = Math.round(height);
+      vignette.width = Math.max(1, Math.round(width));
+      vignette.height = Math.max(1, Math.round(height));
       const g = vignette.getContext('2d');
       const grad = g.createRadialGradient(width / 2, height / 2, height * 0.2, width / 2, height * 0.45, height * 0.78);
       grad.addColorStop(0, 'rgba(0,0,0,0)');
@@ -316,7 +338,44 @@ export function createRenderer(canvas) {
       g.fillStyle = grad;
       g.fillRect(0, 0, width, height);
     }
-    ctx.drawImage(vignette, 0, 0, width, height);
+    target.drawImage(vignette, 0, 0, width, height);
+  }
+
+  function stillBackground() {
+    if (stillBg && stillBg.w === width && stillBg.h === height && stillBg.theme === theme.id && stillBg.dpr === dpr) return stillBg;
+    const plate = document.createElement('canvas');
+    plate.width = Math.max(1, Math.round(width * dpr));
+    plate.height = Math.max(1, Math.round(height * dpr));
+    const g = plate.getContext('2d');
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.drawImage(backdrop(), 0, 0, width, height);
+    drawOrbs(g, 0, false);
+    drawVignette(g);
+    plate.w = width;
+    plate.h = height;
+    plate.theme = theme.id;
+    plate.dpr = dpr;
+    stillBg = plate;
+    return plate;
+  }
+
+  function drawBackground(now) {
+    if (!bgImage && !bgPulse) {
+      ctx.drawImage(stillBackground(), 0, 0, width, height);
+      drawStars(now);
+      return;
+    }
+    if (!bgImage) {
+      ctx.drawImage(backdrop(), 0, 0, width, height);
+      drawOrbs(ctx, now, true);
+      drawStars(now);
+    } else {
+      const source = backgroundSource();
+      if (source) ctx.drawImage(source, 0, 0, width, height);
+      ctx.fillStyle = `rgba(0,0,0,${darkness})`;
+      ctx.fillRect(0, 0, width, height);
+    }
+    drawVignette(ctx);
   }
 
   function drawGrid(songTime, now) {
@@ -398,7 +457,6 @@ export function createRenderer(canvas) {
       if (note.end < songTime - 0.4) continue;
       const box = noteBox(note.midi);
       if (!box) continue;
-      const until = note.start - songTime;
       let top = yAt(note.end, songTime);
       let bottom = yAt(note.start, songTime);
       let alpha = 1;
@@ -409,12 +467,6 @@ export function createRenderer(canvas) {
         bottom = Math.min(bottom, hitY + 10);
       }
       if (bottom <= 0 || top >= hitY) continue;
-      const lane = until > 0 && until < 1.1;
-      if (lane) {
-        const glowTop = Math.max(0, hitY - 88);
-        ctx.fillStyle = rgba(noteColor('flow', note.midi), 0.07);
-        ctx.fillRect(box.x, glowTop, box.w, hitY - glowTop);
-      }
       drawBar(box.x, top, box.w, bottom - top, note.midi, note.velocity, alpha);
     }
   }
@@ -461,30 +513,12 @@ export function createRenderer(canvas) {
     }
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    if (!songRef && liveHolds.size === 0) {
-      const y = hitY * 0.4;
-      const grad = ctx.createLinearGradient(width / 2 - 200, y, width / 2 + 200, y);
-      grad.addColorStop(0, theme.accent);
-      grad.addColorStop(1, theme.accent2);
-      ctx.save();
-      ctx.font = '800 76px Oxanium, "Segoe UI", sans-serif';
-      ctx.fillStyle = grad;
-      ctx.shadowColor = theme.accent;
-      ctx.shadowBlur = 22;
-      ctx.fillText('LUMINA', width / 2, y);
-      ctx.shadowBlur = 0;
-      ctx.font = '600 28px "Noto Sans SC", "Microsoft YaHei", sans-serif';
-      ctx.fillStyle = 'rgba(236,244,255,0.92)';
-      ctx.fillText('流光钢琴', width / 2, y + 62);
-      ctx.font = '16px "Noto Sans SC", "Microsoft YaHei", sans-serif';
-      ctx.fillStyle = 'rgba(186,204,224,0.82)';
-      ctx.fillText('插上电钢琴，或导入 MIDI', width / 2, y + 108);
-      ctx.fillText('也可以直接用键盘演奏    A  S  D  F', width / 2, y + 136);
-      ctx.restore();
-    } else if (songRef || playing) {
-      ctx.font = '600 22px "Noto Sans SC", "Microsoft YaHei", sans-serif';
-      ctx.fillStyle = 'rgba(255,255,255,0.92)';
-      ctx.fillText(songRef?.title || '自由演奏', width / 2, 36);
+    if (songRef || playing) {
+      if (!playing) {
+        ctx.font = '600 22px "Noto Sans SC", "Microsoft YaHei", sans-serif';
+        ctx.fillStyle = 'rgba(255,255,255,0.92)';
+        ctx.fillText(songRef?.title || '自由演奏', width / 2, 36);
+      }
       if (songRef) {
         ctx.font = '600 16px Oxanium, "Segoe UI", sans-serif';
         ctx.textAlign = 'right';
@@ -497,11 +531,10 @@ export function createRenderer(canvas) {
         ctx.fillStyle = theme.accent;
         ctx.fillText(`${accuracy().toFixed(2)}%`, width / 2, 66);
       }
-      if (songRef && !playing && !result) {
+      if (mode === 'rhythm' && songRef && !playing && !result) {
         ctx.font = '16px "Noto Sans SC", "Microsoft YaHei", sans-serif';
         ctx.fillStyle = 'rgba(255,255,255,0.62)';
-        const hint = mode === 'rhythm' ? '音游模式：跟着下落的音符弹奏' : '按播放，光轨会落向琴键';
-        ctx.fillText(hint, width / 2, hitY * 0.2);
+        ctx.fillText('音游模式：跟着下落的音符弹奏', width / 2, hitY * 0.2);
       }
     }
 
@@ -593,14 +626,8 @@ export function createRenderer(canvas) {
     }
   }
 
-  function frame(ts) {
-    const dt = Math.min(0.05, last ? (ts - last) / 1000 : 0.016);
-    last = ts;
+  function stepAndDraw(dt, now, songTime, playing) {
     if (!layout) resize();
-    const now = getNow();
-    const songTime = getSongTime();
-    const playing = getPlaying();
-
     energy *= Math.exp(-dt * 1.45);
     comboScale += (1 - comboScale) * Math.min(1, dt * 8);
     if (judge) {
@@ -683,6 +710,15 @@ export function createRenderer(canvas) {
     });
     drawHitLine(now);
     drawHud(songTime, playing, now);
+  }
+
+  function frame(ts) {
+    if (suspended) return;
+    const dt = Math.min(0.05, last ? (ts - last) / 1000 : 0.016);
+    last = ts;
+    stepAndDraw(dt, getNow(), getSongTime(), getPlaying());
+    if (suspended) return;
+    afterPaint?.();
     onFrameCb?.(dt);
     raf = requestAnimationFrame(frame);
   }
@@ -694,9 +730,54 @@ export function createRenderer(canvas) {
       raf = requestAnimationFrame(frame);
     },
     resize,
+    beginCapture() {
+      pixelBudget = 1920 * 1080;
+      recording = false;
+      resize();
+      recording = true;
+    },
+    beginExport() {
+      recording = false;
+      dpr = 1;
+      canvas.width = 1920;
+      canvas.height = 1080;
+      layoutFrame(1920, 1080);
+      recording = true;
+    },
+    setBgPulse(value) {
+      bgPulse = !!value;
+      stillBg = null;
+    },
+    suspend() {
+      suspended = true;
+      cancelAnimationFrame(raf);
+      raf = 0;
+    },
+    resume() {
+      if (!suspended && raf) return;
+      suspended = false;
+      last = 0;
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(frame);
+    },
+    prepareExport(song) {
+      this.beginRun(song, 0);
+      energy = 0;
+      judge = null;
+    },
+    paintExport(songTime, dt, now) {
+      stepAndDraw(dt, now, songTime, true);
+    },
+    endCapture() {
+      if (!recording && pixelBudget === 2560 * 1440) return;
+      recording = false;
+      pixelBudget = 2560 * 1440;
+      resize();
+    },
     setTheme(id) {
       theme = getTheme(id);
       wash = null;
+      stillBg = null;
       particles.setPalette(smokeColors.length ? smokeColors : [theme.accent]);
       document.documentElement.dataset.theme = theme.id;
     },
@@ -765,6 +846,9 @@ export function createRenderer(canvas) {
     onFrame(fn) {
       onFrameCb = fn;
     },
+    setAfterPaint(fn) {
+      afterPaint = fn;
+    },
     hitTest(x, y) {
       return hitTest(layout, x, y, hitY, keyH);
     },
@@ -772,6 +856,7 @@ export function createRenderer(canvas) {
       songRef = song;
       chartHolds.clear();
       releases.length = 0;
+      particles.clear();
       for (const midi of [...glow.keys()]) {
         if (!liveHolds.has(midi)) glow.delete(midi);
       }

@@ -4,7 +4,10 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: false,
-    open: true
+    open: true,
+    watch: {
+      ignored: ['**/release/**', '**/*.mp4', '**/*.zip']
+    }
   },
   preview: {
     host: '127.0.0.1',

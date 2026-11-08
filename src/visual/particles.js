@@ -300,6 +300,10 @@ export function createParticles() {
     ctx.restore();
   }
 
+  function clear() {
+    while (alive.length) pool.push(alive.pop());
+  }
+
   return {
     setPalette,
     burst,
@@ -308,6 +312,7 @@ export function createParticles() {
     ambient,
     update,
     draw,
+    clear,
     count: () => alive.length,
     multiplier: (level) => LEVEL[level] ?? 1
   };

@@ -9,10 +9,15 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Oxanium:wght@500;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/src/style.css" />
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect rx='14' width='64' height='64' fill='%23070b14'/%3E%3Cpath d='M14 46V18h8l10 18 10-18h8v28h-7V30l-8 14h-6l-8-14v16z' fill='%233dfff2'/%3E%3C/svg%3E" />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="icon" href="/favicon.ico" sizes="32x32" />
 </head>
 <body>
   <canvas id="stage"></canvas>
+  <div id="welcome">
+    <p class="welcome-title">流光钢琴</p>
+    <p class="welcome-sub">开源让世界更美好</p>
+  </div>
   <button id="btn-open" type="button" title="打开菜单">菜单</button>
   <aside id="panel">
     <header class="brand">
@@ -41,6 +46,7 @@
       <div class="row">
         <button id="btn-midi" type="button">导入 MIDI</button>
         <button id="btn-demo" type="button">演示曲</button>
+        <button id="btn-song-clear" type="button">清除</button>
       </div>
       <p id="song-meta" class="status">还没有曲目</p>
       <div class="row transport">
@@ -121,16 +127,23 @@
       <input id="flow" type="range" min="0" max="100" value="78" />
       <label class="chk"><input id="chk-labels" type="checkbox" checked /> 显示音名</label>
       <label class="chk"><input id="chk-grid" type="checkbox" checked /> 背景线</label>
+      <label class="chk"><input id="chk-bg-pulse" type="checkbox" /> 背景光跟随音乐</label>
       <label class="chk"><input id="chk-clean" type="checkbox" /> 纯净画面（导出时不画文字）</label>
     </section>
 
     <section class="sec">
       <h2>视频</h2>
+      <label class="lbl" for="export-fps">导出帧数</label>
+      <select id="export-fps">
+        <option value="60">60 帧</option>
+        <option value="30">30 帧</option>
+      </select>
+      <label class="chk"><input id="chk-export-audio" type="checkbox" checked /> 导出声音</label>
       <div class="row">
         <button id="btn-video" type="button">录制画面</button>
         <button id="btn-export-video" type="button">导出整曲视频</button>
       </div>
-      <p class="hint">导出时请保持这个页面在最前。浏览器一般保存为 WebM，可用播放器或格式工厂转成 MP4。</p>
+      <p class="hint">整曲导出为 1080p MP4，可选 30 或 60 帧，也可以关掉声音。不用等曲子播完。导出时会挡住其他操作，完成后自动弹出下载。请留在这个页面，这样渲染更快。</p>
       <button id="btn-full" type="button" class="wide">全屏</button>
     </section>
 
@@ -143,6 +156,14 @@
   </aside>
 
   <div id="rec-badge" hidden><i></i><span>REC</span></div>
+  <div id="export-mask" hidden role="dialog" aria-modal="true" aria-labelledby="export-title">
+    <div class="export-card">
+      <h2 id="export-title">正在导出视频</h2>
+      <p id="export-note">正在直接渲染整曲，不用等它播完。请留在这个页面。完成后会自动弹出下载。</p>
+      <div class="export-track" aria-hidden="true"><span id="export-bar-fill"></span></div>
+      <p id="export-progress">0%</p>
+    </div>
+  </div>
   <div id="toast" role="status"></div>
   <div id="dropmask" hidden>松开即可导入 MIDI 或背景图片</div>
   <input id="file-midi" type="file" accept=".mid,.midi,audio/midi" hidden />

@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark" />
+  <title>LUMINA 流光钢琴</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Oxanium:wght@500;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/src/style.css" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect rx='14' width='64' height='64' fill='%23070b14'/%3E%3Cpath d='M14 46V18h8l10 18 10-18h8v28h-7V30l-8 14h-6l-8-14v16z' fill='%233dfff2'/%3E%3C/svg%3E" />
+</head>
+<body>
+  <canvas id="stage"></canvas>
+  <button id="btn-open" type="button" title="打开菜单">菜单</button>
+  <aside id="panel">
+    <header class="brand">
+      <div class="logo-mark">L</div>
+      <div>
+        <h1>LUMINA</h1>
+        <p>流光钢琴</p>
+      </div>
+      <button id="btn-collapse" type="button">收起</button>
+    </header>
+
+    <section class="sec">
+      <h2>电钢琴</h2>
+      <p class="hint">用 USB 连接电钢琴，浏览器弹出权限时选择允许。请使用 Chrome 或 Edge。</p>
+      <label class="lbl" for="midi-select">输入设备</label>
+      <div class="row">
+        <select id="midi-select"><option value="*">全部设备</option></select>
+        <button id="btn-midi-refresh" type="button">刷新</button>
+      </div>
+      <p id="midi-status" class="status">正在查找设备…</p>
+      <label class="chk"><input id="chk-live" type="checkbox" /> 电脑发声（电钢琴自己有声音时建议关闭）</label>
+    </section>
+
+    <section class="sec">
+      <h2>曲目</h2>
+      <div class="row">
+        <button id="btn-midi" type="button">导入 MIDI</button>
+        <button id="btn-demo" type="button">演示曲</button>
+      </div>
+      <p id="song-meta" class="status">还没有曲目</p>
+      <div class="row transport">
+        <button id="btn-play" class="primary" type="button">播放</button>
+        <button id="btn-stop" type="button">停止</button>
+      </div>
+      <input id="seek" type="range" min="0" max="1" step="0.01" value="0" />
+      <div class="split"><span id="time-label">0:00 / 0:00</span><label class="chk inline"><input id="chk-loop" type="checkbox" /> 循环</label></div>
+      <label class="lbl"><span>播放速度</span><span id="speed-label">1.00×</span></label>
+      <input id="speed" type="range" min="50" max="150" step="1" value="100" />
+      <label class="lbl"><span>曲目音量</span><span id="volume-label">82%</span></label>
+      <input id="volume" type="range" min="0" max="100" value="82" />
+      <label class="chk"><input id="chk-guide" type="checkbox" checked /> 音游模式播放提示音</label>
+      <label class="chk"><input id="chk-drums" type="checkbox" /> 包含打击乐通道</label>
+    </section>
+
+    <section class="sec">
+      <h2>模式</h2>
+      <div class="seg" id="mode-seg">
+        <button type="button" data-mode="free" class="active">自由演奏</button>
+        <button type="button" data-mode="auto">自动演奏</button>
+        <button type="button" data-mode="rhythm">音游模式</button>
+      </div>
+      <p class="hint">自由演奏是实时瀑布光效。自动演奏会把 MIDI 画成下落光轨。音游模式需要自己打点，并统计准确率。</p>
+    </section>
+
+    <section class="sec">
+      <h2>录音</h2>
+      <div class="row">
+        <button id="btn-rec" type="button">录制演奏</button>
+        <button id="btn-export-midi" type="button">导出 MIDI</button>
+      </div>
+      <div class="oct">
+        <span>电脑键盘</span>
+        <button id="btn-oct-down" type="button">－</button>
+        <strong id="octave-label">C4 – F5</strong>
+        <button id="btn-oct-up" type="button">＋</button>
+      </div>
+    </section>
+
+    <section class="sec">
+      <h2>画面</h2>
+      <div class="row">
+        <button id="btn-bg" type="button">导入背景</button>
+        <button id="btn-bg-clear" type="button">清除</button>
+      </div>
+      <label class="lbl"><span>背景暗度</span><span id="dark-label">42%</span></label>
+      <input id="darkness" type="range" min="0" max="80" value="42" />
+      <label class="lbl"><span>背景模糊</span><span id="blur-label">0</span></label>
+      <input id="blur" type="range" min="0" max="16" value="0" />
+      <label class="lbl"><span>键盘位置</span><span id="lift-label">32</span></label>
+      <input id="lift" type="range" min="0" max="160" value="32" />
+      <label class="lbl" for="theme">主题</label>
+      <select id="theme">
+        <option value="neon">霓虹音游</option>
+        <option value="aurora">极光</option>
+        <option value="cyber">赛博网格</option>
+        <option value="concert">暖金演奏</option>
+      </select>
+      <label class="lbl" for="particle">粒子</label>
+      <select id="particle">
+        <option value="0">柔和</option>
+        <option value="1">标准</option>
+        <option value="2">华丽</option>
+        <option value="3">极致</option>
+      </select>
+      <div class="palette-head">
+        <span>瀑布流</span>
+        <button id="flow-theme" type="button" class="text-btn">跟随主题</button>
+      </div>
+      <div id="flow-swatches" class="swatches"></div>
+      <div class="palette-head">
+        <span>烟雾粒子</span>
+        <button id="smoke-theme" type="button" class="text-btn">跟随主题</button>
+      </div>
+      <div id="smoke-swatches" class="swatches"></div>
+      <label class="lbl"><span>音符流速</span><span id="flow-label">较快</span></label>
+      <input id="flow" type="range" min="0" max="100" value="78" />
+      <label class="chk"><input id="chk-labels" type="checkbox" checked /> 显示音名</label>
+      <label class="chk"><input id="chk-grid" type="checkbox" checked /> 背景线</label>
+      <label class="chk"><input id="chk-clean" type="checkbox" /> 纯净画面（导出时不画文字）</label>
+    </section>
+
+    <section class="sec">
+      <h2>视频</h2>
+      <div class="row">
+        <button id="btn-video" type="button">录制画面</button>
+        <button id="btn-export-video" type="button">导出整曲视频</button>
+      </div>
+      <p class="hint">导出时请保持这个页面在最前。浏览器一般保存为 WebM，可用播放器或格式工厂转成 MP4。</p>
+      <button id="btn-full" type="button" class="wide">全屏</button>
+    </section>
+
+    <section class="sec help">
+      <h2>快捷键</h2>
+      <p>空格 播放 / 暂停 · Esc 停止 · 1 2 3 切换模式</p>
+      <p>R 录制 MIDI · V 录制画面 · Z X 升降八度</p>
+      <p>按住 Shift 时电脑键盘力度更轻。鼠标也可以直接点琴键。</p>
+    </section>
+  </aside>
+
+  <div id="rec-badge" hidden><i></i><span>REC</span></div>
+  <div id="toast" role="status"></div>
+  <div id="dropmask" hidden>松开即可导入 MIDI 或背景图片</div>
+  <input id="file-midi" type="file" accept=".mid,.midi,audio/midi" hidden />
+  <input id="file-bg" type="file" accept="image/*" hidden />
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

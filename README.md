@@ -32,11 +32,5 @@ npm run dev
 
 ## 欢迎打赏
 
-欢迎打赏，谢谢！这将激励我继续努力做更多的工作！
+还是不要打赏了，谢谢，给我点个star吧！我讲继续努力做更多的工作！
 开源让世界更美好！
-
-<p align="center">
-  <img src="docs/wechat-pay.jpg" alt="微信打赏：Rivaboluss" width="280" />
-</p>
-
-Rivaboluss（**群）
